@@ -1,19 +1,10 @@
-FROM node:20-alpine
-
-RUN apk add --no-cache \
-    python3 \
-    make \
-    g++ \
-    cairo-dev \
-    pango-dev \
-    jpeg-dev \
-    giflib-dev
+FROM node:20-slim
 
 WORKDIR /app
 
 COPY package*.json ./
 
-RUN npm install --omit=optional
+RUN npm install --omit=optional --no-optional
 
 COPY . .
 
