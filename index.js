@@ -1,4 +1,4 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys')
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys')
 const { Boom } = require('@hapi/boom')
 const { GoogleGenerativeAI } = require('@google/generative-ai')
 const express = require('express')
@@ -22,66 +22,54 @@ let codigoPairing = null
 let online = false
 
 app.get('/', (req, res) => {
-  if (online) return res.send('<html><body style="font-family:sans-serif;text-align:center;padding:40px;background:#000;color:#fff"><h1>✅ Bot Online!</h1></body></html>')
-  if (codigoPairing) return res.send(`<html><body style="font-family:sans-serif;text-align:center;padding:40px;background:#000;color:#fff"><h1>Codigo WhatsApp</h1><h2 style="font-size:52px;letter-spacing:10px;color:#25D366;background:#111;padding:24px;border-radius:16px">${codigoPairing}</h2><p style="color:#aaa">Expira em 60 segundos!</p></body></html>`)
+  if (online) return res.send('<html><body style="font-family:sans-serif;text-align:center;padding:40px;background:#000;color:#fff"><h1>Bot Online!</h1></body></html>')
+  if (codigoPairing) return res.send(`<html><body style="font-family:sans-serif;text-align:center;padding:40px;background:#000;color:#fff"><h1>Codigo WhatsApp</h1><h2 style="font-size:52px;letter-spacing:10px;color:#25D366;background:#111;padding:24px;border-radius:16px">${codigoPairing}</h2><p>Expira em 60 segundos!</p></body></html>`)
   return res.send('<html><body style="font-family:sans-serif;text-align:center;padding:40px;background:#000;color:#fff"><h1>A iniciar...</h1><p>Aguarda e actualiza.</p></body></html>')
 })
 
-app.listen(PORT, () => console.log(`Servidor na porta ${PORT}`))
+app.listen(PORT, () => console.log('Servidor na porta ' + PORT))
 
 const historicos = {}
 
 async function iniciarBot() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_sessao')
+  const { version, isLatest } = await fetchLatestBaileysVersion()
+  console.log('Versao WhatsApp: ' + version.join('.') + ' | Latest: ' + isLatest)
 
   const sock = makeWASocket({
-    version: [2, 3000, 1015901307],
+    version,
     auth: state,
     printQRInTerminal: false,
     logger: pino({ level: 'silent' }),
-    browser: ['WhatsApp Web', 'Chrome', '124.0.0'],
-    connectTimeoutMs: 30_000,
-    keepAliveIntervalMs: 15_000,
-    retryRequestDelayMs: 2000,
-    maxMsgRetryCount: 3,
+    browser: ['WhatsApp Web', 'Chrome', '124.0.6367.82'],
+    connectTimeoutMs: 60_000,
+    keepAliveIntervalMs: 20_000,
   })
 
   sock.ev.on('creds.update', saveCreds)
 
   let codigoPedido = false
 
-  sock.ev.on('connection.update', async ({ connection, lastDisconnect, qr }) => {
-    console.log('Estado ligacao:', connection)
-
-    if (qr) {
-      console.log('QR gerado (nao usado)')
-    }
-
-    if (connection === 'connecting') {
-      console.log('A ligar ao WhatsApp...')
-    }
+  sock.ev.on('connection.update', async ({ connection, lastDisconnect }) => {
+    console.log('Estado: ' + connection)
 
     if (connection === 'open') {
-      console.log('Ligacao aberta!')
-
       if (!sock.authState.creds.registered && !codigoPedido) {
         codigoPedido = true
-        console.log('A pedir codigo para: +' + MEU_NUMERO)
         try {
-          await new Promise(r => setTimeout(r, 2000))
+          await new Promise(r => setTimeout(r, 3000))
           const codigo = await sock.requestPairingCode(MEU_NUMERO)
           codigoPairing = codigo
           console.log('CODIGO: ' + codigo)
         } catch (err) {
-          console.error('Erro codigo:', err.message)
+          console.error('Erro codigo: ' + err.message)
           codigoPedido = false
         }
       }
-
       if (sock.authState.creds.registered) {
         online = true
         codigoPairing = null
-        console.log('Bot online e pronto!')
+        console.log('Bot online!')
       }
     }
 
@@ -89,13 +77,9 @@ async function iniciarBot() {
       online = false
       codigoPedido = false
       const statusCode = new Boom(lastDisconnect?.error)?.output?.statusCode
-      const mensagemErro = lastDisconnect?.error?.message || 'desconhecido'
-      console.log('Ligacao fechada. Codigo:', statusCode, '| Erro:', mensagemErro)
-
-      if (statusCode === DisconnectReason.loggedOut) {
-        console.log('Sessao terminada pelo utilizador.')
-      } else {
-        console.log('A reconectar em 5s...')
+      console.log('Fechado. Codigo: ' + statusCode)
+      if (statusCode !== DisconnectReason.loggedOut) {
+        console.log('Reconectar em 5s...')
         setTimeout(iniciarBot, 5000)
       }
     }
@@ -107,37 +91,30 @@ async function iniciarBot() {
     if (!msg?.message || msg.key.fromMe) return
     const userId = msg.key.remoteJid
     if (userId.includes('@g.us')) return
-
     const texto = (msg.message.conversation || msg.message.extendedTextMessage?.text || '').trim()
     if (!texto) return
-
-    console.log('Mensagem de ' + userId.replace('@s.whatsapp.net', '') + ': ' + texto)
-
     try {
       await sock.sendPresenceUpdate('composing', userId)
       if (!historicos[userId]) historicos[userId] = []
       historicos[userId].push({ role: 'user', parts: [{ text: texto }] })
       if (historicos[userId].length > 20) historicos[userId] = historicos[userId].slice(-20)
-
       const chat = model.startChat({ history: historicos[userId].slice(0, -1) })
       const resultado = await chat.sendMessage(texto)
       const resposta = resultado.response.text().trim()
-
       historicos[userId].push({ role: 'model', parts: [{ text: resposta }] })
       await sock.sendPresenceUpdate('paused', userId)
       await sock.sendMessage(userId, { text: resposta }, { quoted: msg })
-
     } catch (erro) {
-      console.error('Erro:', erro.message)
+      console.error('Erro: ' + erro.message)
       await sock.sendMessage(userId, { text: 'Desculpa, tente novamente!' })
     }
   })
 }
 
 iniciarBot().catch(err => {
-  console.error('Erro fatal:', err.message)
+  console.error('Erro fatal: ' + err.message)
   setTimeout(iniciarBot, 10000)
 })
 
-process.on('uncaughtException', err => console.error('Excecao:', err.message))
-process.on('unhandledRejection', err => console.error('Rejeicao:', err?.message || err))
+process.on('uncaughtException', err => console.error(err.message))
+process.on('unhandledRejection', err => console.error(err?.message || err))
