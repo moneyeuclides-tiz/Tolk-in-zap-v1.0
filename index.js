@@ -3,6 +3,7 @@ const { Boom } = require('@hapi/boom')
 const { GoogleGenerativeAI } = require('@google/generative-ai')
 const express = require('express')
 const pino = require('pino')
+const fs = require('fs')
 
 // ============================================================
 // CONFIGURAÇÃO
@@ -13,6 +14,18 @@ const PORT           = process.env.PORT || 3000
 const NOME_BOT       = process.env.NOME_BOT || 'Assistente'
 const MAX_HISTORICO  = parseInt(process.env.MAX_HISTORICO || '20', 10)
 const MAX_RECONNECT_DELAY_MS = 60_000
+const AUTH_FOLDER = 'auth_sessao'
+
+function limparSessao() {
+  try {
+    if (fs.existsSync(AUTH_FOLDER)) {
+      fs.rmSync(AUTH_FOLDER, { recursive: true, force: true })
+      console.log('🧹 Pasta de sessão removida — pareamento será feito do zero.')
+    }
+  } catch (err) {
+    console.error('❌ Erro ao limpar sessão:', err.message)
+  }
+}
 
 if (!GEMINI_API_KEY) {
   console.error('❌ GEMINI_API_KEY não definida.')
@@ -95,7 +108,7 @@ function adicionarMensagem(userId, role, texto) {
 let tentativasReconexao = 0
 
 async function iniciarBot() {
-  const { state, saveCreds } = await useMultiFileAuthState('auth_sessao')
+  const { state, saveCreds } = await useMultiFileAuthState(AUTH_FOLDER)
   const { version } = await fetchLatestBaileysVersion()
 
   const sock = makeWASocket({
@@ -124,6 +137,9 @@ async function iniciarBot() {
       console.log(`🔑 ==========================================\n`)
     } catch (err) {
       console.error('❌ Erro ao gerar código:', err.message)
+      limparSessao()
+      setTimeout(iniciarBot, 5000)
+      return
     }
   }
 
@@ -135,13 +151,25 @@ async function iniciarBot() {
       const codigo = new Boom(lastDisconnect?.error)?.output?.statusCode
       console.log(`🔌 Conexão fechada — código: ${codigo}`)
 
+      const falhouDuranteAssociacao = codigoPairing && !sock.authState.creds.registered
+
+      if (falhouDuranteAssociacao) {
+        console.log('❌ Código de associação rejeitado ou expirado. A limpar sessão e gerar novo código...')
+        codigoPairing = null
+        limparSessao()
+        setTimeout(iniciarBot, 3000)
+        return
+      }
+
       if (codigo !== DisconnectReason.loggedOut) {
         tentativasReconexao++
         const delay = Math.min(5000 * tentativasReconexao, MAX_RECONNECT_DELAY_MS)
         console.log(`🔄 A reconectar em ${delay / 1000}s (tentativa ${tentativasReconexao})...`)
         setTimeout(iniciarBot, delay)
       } else {
-        console.log('❌ Sessão terminada (logged out). Apaga a pasta auth_sessao e reinicia para gerar novo código.')
+        console.log('❌ Sessão terminada (logged out). A limpar sessão para permitir novo pareamento...')
+        limparSessao()
+        setTimeout(iniciarBot, 3000)
       }
     }
 
