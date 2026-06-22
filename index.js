@@ -118,7 +118,11 @@ async function iniciarBot() {
     browser: ['WhatsApp AI Bot', 'Chrome', '1.0.0'],
     generateHighQualityLinkPreview: false,
     connectTimeoutMs: 60_000,
-    keepAliveIntervalMs: 30_000,
+    // O padrão de 30s não estava a manter a ligação viva o suficiente em
+    // frente ao proxy/load balancer do Render, que parece fechar a ligação
+    // por inatividade de rede a cada ~150-160 segundos. Reduzir o intervalo
+    // de keep-alive força tráfego mais frequente e evita esse corte.
+    keepAliveIntervalMs: 10_000,
     // Em ambientes cloud com mais latência de rede (Render, Railway, etc.),
     // o timeout interno padrão de queries do Baileys pode expirar antes do
     // handshake do pairing code terminar, gerando erro 408 mesmo quando o
