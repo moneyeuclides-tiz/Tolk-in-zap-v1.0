@@ -121,31 +121,45 @@ async function iniciarBot() {
     keepAliveIntervalMs: 30_000,
   })
 
-  // Pede código de associação por número (em vez de QR)
-  if (!sock.authState.creds.registered) {
-    const numero = MEU_NUMERO.replace(/[^0-9]/g, '')
-    console.log(`📱 A gerar código para o número: +${numero}`)
-
-    await new Promise(resolve => setTimeout(resolve, 3000)) // espera ligação
-
-    try {
-      const codigo = await sock.requestPairingCode(numero)
-      codigoPairing = codigo
-      console.log(`\n🔑 ==========================================`)
-      console.log(`🔑 CÓDIGO DE ASSOCIAÇÃO: ${codigo}`)
-      console.log(`🔑 Insere este código no WhatsApp!`)
-      console.log(`🔑 ==========================================\n`)
-    } catch (err) {
-      console.error('❌ Erro ao gerar código:', err.message)
-      limparSessao()
-      setTimeout(iniciarBot, 5000)
-      return
-    }
-  }
-
   sock.ev.on('creds.update', saveCreds)
 
-  sock.ev.on('connection.update', ({ connection, lastDisconnect }) => {
+  let pedidoCodigoEmAndamento = false
+
+  sock.ev.on('connection.update', async (update) => {
+    const { connection, lastDisconnect, qr } = update
+
+    // Solicita o código de associação só quando o socket sinaliza que está
+    // realmente a estabelecer a ligação (ou já tem um QR pronto para troca),
+    // em vez de confiar num timeout fixo que pode disparar cedo demais.
+    if (
+      !sock.authState.creds.registered &&
+      !pedidoCodigoEmAndamento &&
+      (connection === 'connecting' || qr)
+    ) {
+      pedidoCodigoEmAndamento = true
+      const numero = MEU_NUMERO.replace(/[^0-9]/g, '')
+      console.log(`📱 A gerar código para o número: +${numero}`)
+
+      // Pequena margem de segurança: mesmo após o evento "connecting",
+      // o socket por vezes precisa de um instante extra antes de aceitar
+      // o pedido de código (sobretudo em redes mais lentas, como no Render).
+      await new Promise(resolve => setTimeout(resolve, 20000))
+
+      try {
+        const codigo = await sock.requestPairingCode(numero)
+        codigoPairing = codigo
+        console.log(`\n🔑 ==========================================`)
+        console.log(`🔑 CÓDIGO DE ASSOCIAÇÃO: ${codigo}`)
+        console.log(`🔑 Insere este código no WhatsApp!`)
+        console.log(`🔑 ==========================================\n`)
+      } catch (err) {
+        console.error('❌ Erro ao gerar código:', err.message)
+        limparSessao()
+        setTimeout(iniciarBot, 5000)
+        return
+      }
+    }
+
     if (connection === 'close') {
       online = false
       const codigo = new Boom(lastDisconnect?.error)?.output?.statusCode
