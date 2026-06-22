@@ -119,6 +119,12 @@ async function iniciarBot() {
     generateHighQualityLinkPreview: false,
     connectTimeoutMs: 60_000,
     keepAliveIntervalMs: 30_000,
+    // Em ambientes cloud com mais latência de rede (Render, Railway, etc.),
+    // o timeout interno padrão de queries do Baileys pode expirar antes do
+    // handshake do pairing code terminar, gerando erro 408 mesmo quando o
+    // código foi digitado corretamente e a tempo. Desativar esse timeout
+    // resolve esse cenário específico.
+    defaultQueryTimeoutMs: undefined,
   })
 
   sock.ev.on('creds.update', saveCreds)
@@ -140,10 +146,9 @@ async function iniciarBot() {
       const numero = MEU_NUMERO.replace(/[^0-9]/g, '')
       console.log(`📱 A gerar código para o número: +${numero}`)
 
-      // Pequena margem de segurança: mesmo após o evento "connecting",
-      // o socket por vezes precisa de um instante extra antes de aceitar
-      // o pedido de código (sobretudo em redes mais lentas, como no Render).
-      await new Promise(resolve => setTimeout(resolve, 20000))
+      // Pequena margem de segurança após o evento "connecting" para garantir
+      // que o handshake inicial do socket esteja estável.
+      await new Promise(resolve => setTimeout(resolve, 3000))
 
       try {
         const codigo = await sock.requestPairingCode(numero)
